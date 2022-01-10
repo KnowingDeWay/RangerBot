@@ -1,16 +1,11 @@
-# This is a sample Python script.
+import discord
+import random
+import sqlite3
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+TOKEN = "OTI5OTk2NjAwNzQ1NTMzNDQw.Ydvc1A.oqFn08asLY_hwKU0lu7ogeMyz6E"
 
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+client = discord.Client()
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+client.run(TOKEN)
