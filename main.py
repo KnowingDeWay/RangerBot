@@ -3,6 +3,7 @@ import models
 import discord
 import sqlite3
 import os
+import apputil
 
 
 def load_token():
@@ -27,7 +28,7 @@ def create_conn():
             return conn
         new_db_file = open(DB_PATH, 'w')
         new_db_file.close()
-        conn = sqlite3.connect(DB_PATH, 'r')
+        conn = sqlite3.connect(DB_PATH)
         return conn
     except Error as e:
         print(e)
@@ -59,19 +60,39 @@ async def configure_bot(params, message):
     sub_comm = params.pop(0)
     match sub_comm:
         case 'addreqrg': await add_required_rolegroup(params, message)
+        case 'editrg': await edit_rolegroup(params, message)
+        case 'deleterg': await delete_rolegroup(params, message)
 
 
 async def add_required_rolegroup(params, message):
     db_conn = create_conn()
     db_cursor = db_conn.cursor()
     try:
-        db_cursor.execute(f"""
-            INSERT INTO RoleGroups (group_name, group_required, guild_id) VALUES('{params[0]}', 1, {message.guild.id})
+        # Check if the name is defined (null or whitespace names not allowed)
+        if apputil.is_null_or_whitespace(params[0]):
+            await message.channel.send('ERROR: In command addreqrg [name], the field [name] has to be defined!')
+            return
+        rows = db_cursor.execute(f"""
+            SELECT * FROM RoleGroups WHERE group_name = '{params[0]}' AND guild_id = {message.guild.id}
+        """).fetchall()
+        if len(rows) == 0:
+            db_cursor.execute(f"""
+                INSERT INTO RoleGroups (group_name, group_required, guild_id) 
+                VALUES('{params[0]}', 1, {message.guild.id})
+            """)
+            db_conn.commit()
+            await message.channel.send(f'Successful addition of role group: {params[0]}')
+        else:
+            await message.channel.send(f"""
+                ERROR: Role Group named: '{params[0]}' already exists!
+            """)
+    except Error as e:
+        await message.channel.send('ERROR: Unable to add new role group record!')
+        print(e)
+    except IndexError as e:
+        await message.channel.send("""
+            Please make sure command is in the following format: addreqrg [name]
         """)
-        db_conn.commit()
-        await message.channel.send(f'Successful addition of role group: {params[0]}')
-    except IntegrityError as e:
-        await message.channel.send(f'ERROR: Role Group - {params[0]} already exists!')
         print(e)
     db_cursor.close()
     db_conn.close()
@@ -109,6 +130,82 @@ async def view_required_rolegroups(message):
     db_conn.close()
 
 
+async def edit_rolegroup(params, message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    try:
+        # All required parameters must be passed even if they are not to be edited
+        if apputil.is_null_or_whitespace(params[0]):
+            await message.channel.send("""
+                ERROR: In command editrg [name] [new name] [group required], the field [new name] has to be defined!
+            """)
+            return
+        # Check if the user is trying to change the name of an existing role group to one that already
+        # exists for that server
+        rows = db_cursor.execute(f"""
+            SELECT * FROM RoleGroups WHERE group_name = '{params[1]}' AND guild_id = {message.guild.id}
+        """).fetchall()
+        # Check if the new name corresponds to an existing role group if the new name is different
+        if len(rows) == 0 or params[0] == params[1]:
+            if params[2] == 'yes' or params[2] == 'no':
+                group_required_param = 1 if params[2] == 'yes' else 0
+                db_cursor.execute(f"""
+                    UPDATE RoleGroups SET group_name = '{params[1]}', group_required = {group_required_param} 
+                    WHERE group_name = '{params[0]}' AND guild_id = {message.guild.id}
+                """)
+                db_conn.commit()
+                await message.channel.send(f'Successful edition of role group: {params[0]}')
+            else:
+                await message.channel.send(
+                    """ERROR: For the command, editrg [name] [new name] [group required], 
+                    the group required parameter should either be 'yes' or 'no' """
+                )
+        else:
+            await message.channel.send(f"""
+                ERROR: Role Group named: '{params[1]}' already exists!
+            """)
+    except Error as e:
+        await message.channel.send('ERROR: Unable to edit record!')
+        print(e)
+    except IndexError as e:
+        await message.channel.send("""
+            Please make sure command is in the following format: editrg [name] [new name] [group_required].
+        """)
+        print(e)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def delete_rolegroup(params, message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    try:
+        # Check if the user is trying to delete an existing role group for that server
+        rows = db_cursor.execute(f"""
+                SELECT * FROM RoleGroups WHERE group_name = '{params[0]}' AND guild_id = {message.guild.id}
+            """).fetchall()
+        if len(rows) != 0:
+            db_cursor.execute(f"""
+                DELETE FROM RoleGroups WHERE group_name = '{params[0]}' AND guild_id = {message.guild.id}
+            """)
+            db_conn.commit()
+            await message.channel.send(f'Successful deletion of role group: {params[0]}')
+        else:
+            await message.channel.send(f"""
+                NOTE: You attempted to delete a non-existent role group - '{params[0]}'
+            """)
+    except Error as e:
+        await message.channel.send('ERROR: Unexpected Error occurred while trying to delete this record')
+        print(e)
+    except IndexError as e:
+        await message.channel.send("""
+            ERROR: Please make sure command is in the following format: deleterq [group name]
+        """)
+        print(e)
+    db_cursor.close()
+    db_conn.close()
+
+
 @client.event
 async def on_ready():
     db_conn = create_conn()
@@ -130,10 +227,14 @@ async def on_guild_join(guild):
     if db_conn is None:
         return
     db_cursor = db_conn.cursor()
-    db_cursor.execute(f"""
-        INSERT INTO Servers (guild_id, guild_name) VALUES({guild.id}, '{guild.name}')
-    """)
-    db_conn.commit()
+    try:
+        db_cursor.execute(f"""
+            INSERT INTO Servers (guild_id, guild_name) VALUES({guild.id}, '{guild.name}')
+        """)
+        db_conn.commit()
+    # Useful code in case the server id happens to already be in the database for any reason
+    except IntegrityError as e:
+        print(e)
     db_cursor.close()
     db_conn.close()
 
