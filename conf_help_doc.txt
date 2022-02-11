@@ -1,0 +1,12 @@
+conf help:
+
+addreqrg [name]: Add a new required role group, [name] inidcates the name of the new role group. 
+		 All role groups names must be unique and cannot be empty
+
+editrg [name] [new name] [group required]: Edit an existing role group. [name] indicates the role group to edit. 
+					   [new name] indicates the new name of the role group (must be unique)
+					   [group required] indicates if this role group is required. The value
+					   of this parameter must either be 'yes' or 'no'
+
+deleterg [group name]: Delete an existing role group under a certain name. [group name] is a parameter 
+		       that indicates the name of the role group to be deleted 

@@ -42,15 +42,15 @@ async def interpret_command(command, params, message):
         case 'conf':
             await configure_bot(params, message)
         case 'help':
-            await send_help(message)
+            await send_help(message, 'help_doc.txt')
         case 'viewreqrg':
             await view_required_rolegroups(message)
         case _:
             await message.channel.send('ERROR: Unknown Command!')
 
 
-async def send_help(message):
-    help_file = open('help_doc.txt', 'r')
+async def send_help(message, filename):
+    help_file = open(filename, 'r')
     help_text = help_file.read()
     help_file.close()
     await message.channel.send(help_text)
@@ -62,6 +62,7 @@ async def configure_bot(params, message):
         case 'addreqrg': await add_required_rolegroup(params, message)
         case 'editrg': await edit_rolegroup(params, message)
         case 'deleterg': await delete_rolegroup(params, message)
+        case 'help': await send_help(message, 'conf_help_doc.txt')
 
 
 async def add_required_rolegroup(params, message):
@@ -199,7 +200,7 @@ async def delete_rolegroup(params, message):
         print(e)
     except IndexError as e:
         await message.channel.send("""
-            ERROR: Please make sure command is in the following format: deleterq [group name]
+            ERROR: Please make sure command is in the following format: deleterg [group name]
         """)
         print(e)
     db_cursor.close()

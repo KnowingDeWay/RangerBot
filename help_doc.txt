@@ -1,0 +1,7 @@
+ranger help:
+
+!rgr conf: Access commands such as conf addreqrg, conf editrg, conf deleterg to configure the required role groups for the bot.
+
+!rgr help: Display this help menu.
+
+!rgr viewreqrg: Shows all required role groups for this server. 
