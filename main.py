@@ -1,3 +1,4 @@
+import asyncio
 from sqlite3 import Error, IntegrityError
 import models
 import discord
@@ -29,6 +30,7 @@ def create_conn():
         new_db_file = open(DB_PATH, 'w')
         new_db_file.close()
         conn = sqlite3.connect(DB_PATH)
+        conn.execute('PRAGMA foreign_keys = 1;')
         return conn
     except Error as e:
         print(e)
@@ -44,7 +46,9 @@ async def interpret_command(command, params, message):
         case 'help':
             await send_help(message, 'help_doc.txt')
         case 'viewreqrg':
-            await view_required_rolegroups(message)
+            await view_required_role_groups(message)
+        case 'leaveguild':
+            await leave_guild(message)
         case _:
             await message.channel.send('ERROR: Unknown Command!')
 
@@ -59,13 +63,15 @@ async def send_help(message, filename):
 async def configure_bot(params, message):
     sub_comm = params.pop(0)
     match sub_comm:
-        case 'addreqrg': await add_required_rolegroup(params, message)
-        case 'editrg': await edit_rolegroup(params, message)
-        case 'deleterg': await delete_rolegroup(params, message)
+        case 'addreqrg': await add_required_role_group(params, message)
+        case 'editrg': await edit_role_group(params, message)
+        case 'deleterg': await delete_role_group(params, message)
+        case 'addrolestorg': await add_roles_to_role_group(params, message)
+        case 'addrolestorgbyid': await add_roles_to_role_group_by_id(params, message)
         case 'help': await send_help(message, 'conf_help_doc.txt')
 
 
-async def add_required_rolegroup(params, message):
+async def add_required_role_group(params, message):
     db_conn = create_conn()
     db_cursor = db_conn.cursor()
     try:
@@ -87,19 +93,19 @@ async def add_required_rolegroup(params, message):
             await message.channel.send(f"""
                 ERROR: Role Group named: '{params[0]}' already exists!
             """)
-    except Error as e:
-        await message.channel.send('ERROR: Unable to add new role group record!')
-        print(e)
     except IndexError as e:
         await message.channel.send("""
             Please make sure command is in the following format: addreqrg [name]
         """)
         print(e)
+    except Error as e:
+        await message.channel.send('ERROR: Unable to add new role group record!')
+        print(e)
     db_cursor.close()
     db_conn.close()
 
 
-async def view_required_rolegroups(message):
+async def view_required_role_groups(message):
     db_conn = create_conn()
     db_cursor = db_conn.cursor()
     rows = None
@@ -131,7 +137,7 @@ async def view_required_rolegroups(message):
     db_conn.close()
 
 
-async def edit_rolegroup(params, message):
+async def edit_role_group(params, message):
     db_conn = create_conn()
     db_cursor = db_conn.cursor()
     try:
@@ -165,19 +171,19 @@ async def edit_rolegroup(params, message):
             await message.channel.send(f"""
                 ERROR: Role Group named: '{params[1]}' already exists!
             """)
-    except Error as e:
-        await message.channel.send('ERROR: Unable to edit record!')
-        print(e)
     except IndexError as e:
         await message.channel.send("""
             Please make sure command is in the following format: editrg [name] [new name] [group_required].
         """)
         print(e)
+    except Error as e:
+        await message.channel.send('ERROR: Unable to edit record!')
+        print(e)
     db_cursor.close()
     db_conn.close()
 
 
-async def delete_rolegroup(params, message):
+async def delete_role_group(params, message):
     db_conn = create_conn()
     db_cursor = db_conn.cursor()
     try:
@@ -195,16 +201,143 @@ async def delete_rolegroup(params, message):
             await message.channel.send(f"""
                 NOTE: You attempted to delete a non-existent role group - '{params[0]}'
             """)
-    except Error as e:
-        await message.channel.send('ERROR: Unexpected Error occurred while trying to delete this record')
-        print(e)
     except IndexError as e:
         await message.channel.send("""
             ERROR: Please make sure command is in the following format: deleterg [group name]
         """)
         print(e)
+    except Error as e:
+        await message.channel.send('ERROR: Unexpected Error occurred while trying to delete this record')
+        print(e)
     db_cursor.close()
     db_conn.close()
+
+
+async def add_roles_to_role_group(params, message):
+    if len(params) == 0:
+        await message.channel.send('ERROR: Command must be in the following form: addrolestorg [role group name]'
+                                   ' @role1 @role2 ...')
+        return
+    role_group_name = params.pop(0)
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    role_group = db_cursor.execute(f"""
+        SELECT * FROM RoleGroups WHERE group_name = '{role_group_name}' AND guild_id = {message.guild.id}
+    """).fetchone()
+    if role_group is None:
+        await message.channel.send(f'ERROR: Could not find role group - {role_group_name}')
+        db_cursor.close()
+        db_conn.close()
+        return
+    message_content = ''
+    if len(message.role_mentions) == 0:
+        await message.channel.send('ERROR: No pinged roles to add to role group found!')
+        db_cursor.close()
+        db_conn.close()
+        return
+    for role in message.role_mentions:
+        try:
+            db_cursor.execute(f"""
+                INSERT INTO RoleInfo (role_id, role_name, role_grouped, group_id) 
+                VALUES({role.id}, '{role.name}', 1, {role_group[0]})
+            """)
+            message_content += f'Successful addition of role: {role.name} to role group: {role_group[1]}\n'
+        except IntegrityError as e:
+            message_content += f'ERROR: Cannot add the same role (Role Name: {role.name}) ' \
+                               + 'twice to various role groups!\n'
+            print(e)
+        except Error as e:
+            message_content += f'ERROR: Failed to add role with id: {role.id}\n'
+            print(e)
+    try:
+        db_conn.commit()
+        await message.channel.send(message_content)
+    except Error as e:
+        await message.channel.send('ERROR: Database error occurred during commitment of database changes!')
+        print(e)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def add_roles_to_role_group_by_id(params, message):
+    if len(params) == 0:
+        await message.channel.send('ERROR: Command must be in the following form: addrolestorgbyid [role group name]'
+                                   ' [role id 1] [role id 2] ...')
+        return
+    role_group_name = params.pop(0)
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    role_group = db_cursor.execute(f"""
+            SELECT * FROM RoleGroups WHERE group_name = '{role_group_name}' AND guild_id = {message.guild.id}
+        """).fetchone()
+    if role_group is None:
+        await message.channel.send(f'ERROR: Could not find role group - {role_group_name}')
+        db_cursor.close()
+        db_conn.close()
+        return
+    if len(params) == 0:
+        await message.channel.send(f'ERROR: No role ids have been specified!')
+        db_cursor.close()
+        db_conn.close()
+        return
+    message_content = ''
+    for role_id in params:
+        try:
+            role = message.guild.get_role(int(role_id))
+            db_cursor.execute(f"""
+                INSERT INTO RoleInfo (role_id, role_name, role_grouped, group_id)
+                VALUES({role_id}, '{role.name}', 1, {role_group[0]})
+            """)
+            message_content += f'Successful addition of role id: {role_id}\n'
+        except ValueError as e:
+            message_content += f'ERROR: For Command: addrolestorgbyid [group name] [role id 1] [role id 2] ...' \
+                            + f'Each role id MUST be an integer. Failed to add role id: {role_id}\n'
+            print(e)
+        except IntegrityError as e:
+            message_content += f'ERROR: Cannot add the same role (Role Id: {role_id}) ' \
+                               + 'twice to various role groups!\n'
+            print(e)
+        except Error as e:
+            message_content += f'ERROR: Failed to add role with id: {role_id}\n'
+            print(e)
+    try:
+        db_conn.commit()
+        await message.channel.send(message_content)
+    except Error as e:
+        await message.channel.send('ERROR: Database error occurred during commitment of database changes!')
+        print(e)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def leave_guild(message):
+    await message.channel.send("""
+        NOTE: The bot will leave this server, all role group configurations will be wiped... 
+        Are you sure you want to leave? (Type '--confirm' to ensure this bot leaves or type '--rollback'
+        to cancel this process)
+    """)
+    try:
+        resp_text = ''
+
+        # Ensures that the bot will ONLY listen to the original poster for their answer
+        def check(msg):
+            return msg.author.id == message.author.id
+
+        while resp_text != '--confirm' and resp_text != '--rollback':
+            response_message = await client.wait_for("message", check=check, timeout=60)
+            resp_text = response_message.content
+            if resp_text == '--confirm':
+                await message.channel.send('NOTE: The Ranger bot has left the server!')
+                await message.guild.leave()
+            elif resp_text == '--rollback':
+                await message.channel.send('NOTE: Leave Guild operation cancelled')
+            else:
+                await message.channel.send("""
+                    NOTE: Please type --confirm or --rollback to continue
+                """)
+    except asyncio.TimeoutError as e:
+        await message.channel.send('ERROR: The operation has been cancelled due to timeout!')
+        print(e)
 
 
 @client.event

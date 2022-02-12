@@ -1,6 +1,8 @@
 conf help:
 
-addreqrg [name]: Add a new required role group, [name] inidcates the name of the new role group. 
+help: Displays this help document
+
+addreqrg [name]: Add a new required role group, [name] indicates the name of the new role group. 
 		 All role groups names must be unique and cannot be empty
 
 editrg [name] [new name] [group required]: Edit an existing role group. [name] indicates the role group to edit. 
@@ -9,4 +11,15 @@ editrg [name] [new name] [group required]: Edit an existing role group. [name] i
 					   of this parameter must either be 'yes' or 'no'
 
 deleterg [group name]: Delete an existing role group under a certain name. [group name] is a parameter 
-		       that indicates the name of the role group to be deleted 
+		       that indicates the name of the role group to be deleted
+
+addrolestorg [role group name] @role1 @role2 ....: Add roles to a role group by pinging the roles that you wish
+						   to add to the group. [role group name] indicates the name of
+						   the role group you want to add these roles to
+
+addrolestorgbyid [role group name] [role id 1] [role id 2] ....: Adds roles to a role group by their numeric ids
+								 assigned by Discord. [role group name] indicates
+								 the name of the role group to add these roles to.
+								 [role id n] indicates the role id of the role
+								 you want to add to the role group. The id of a
+								 role is a numeric value assigned by Discord
