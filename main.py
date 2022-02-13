@@ -26,11 +26,12 @@ def create_conn():
     try:
         if os.path.exists(DB_PATH):
             conn = sqlite3.connect(DB_PATH)
+            conn.cursor().execute('PRAGMA foreign_keys = ON')
             return conn
         new_db_file = open(DB_PATH, 'w')
         new_db_file.close()
         conn = sqlite3.connect(DB_PATH)
-        conn.execute('PRAGMA foreign_keys = 1;')
+        conn.cursor().execute('PRAGMA foreign_keys = ON')
         return conn
     except Error as e:
         print(e)
@@ -117,6 +118,11 @@ async def view_required_role_groups(message):
     except Error as e:
         await message.channel.send('ERROR: Failed to retrieve role groups for this server!')
         print(e)
+    if len(rows) == 0:
+        await message.channel.send('NOTE: No role groups to show!')
+        db_cursor.close()
+        db_conn.close()
+        return
     if rows is not None:
         role_groups = []
         message_content = ''
@@ -379,7 +385,7 @@ async def on_guild_remove(guild):
     if db_conn is None:
         return
     db_cursor = db_conn.cursor()
-    db_cursor.execute(f"""
+    db_cursor.executescript(f"""
         DELETE FROM Servers WHERE guild_id = {guild.id}
     """)
     db_conn.commit()
