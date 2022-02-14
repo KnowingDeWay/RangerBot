@@ -69,6 +69,8 @@ async def configure_bot(params, message):
         case 'deleterg': await delete_role_group(params, message)
         case 'addrolestorg': await add_roles_to_role_group(params, message)
         case 'addrolestorgbyid': await add_roles_to_role_group_by_id(params, message)
+        case 'reassrlestorg': await  reassign_roles_to_role_group(params, message)
+        case 'reassrlestorgbyid': await reassign_roles_to_role_group_by_id(params, message)
         case 'help': await send_help(message, 'conf_help_doc.txt')
 
 
@@ -236,6 +238,8 @@ async def add_roles_to_role_group(params, message):
         db_conn.close()
         return
     message_content = ''
+    # The remaining operations are pointless if there are no roles to relocate
+    # Also this code prevents an HTTP error that occurs when trying to post an empty body
     if len(message.role_mentions) == 0:
         await message.channel.send('ERROR: No pinged roles to add to role group found!')
         db_cursor.close()
@@ -314,6 +318,122 @@ async def add_roles_to_role_group_by_id(params, message):
         print(e)
     db_cursor.close()
     db_conn.close()
+
+
+async def reassign_roles_to_role_group(params, message):
+    try:
+        role_group_name = params.pop(0)
+        db_conn = create_conn()
+        db_cursor = db_conn.cursor()
+        role_group = db_cursor.execute(f"""
+            SELECT * FROM RoleGroups WHERE group_name = '{role_group_name}' AND guild_id = {message.guild.id}
+        """).fetchone()
+        # Cannot reassign a role to a non-existent role group
+        if role_group is None:
+            await message.channel.send(f'ERROR: Role Group: {role_group_name} does not exist!')
+            db_cursor.close()
+            db_conn.close()
+            return
+        message_content = ''
+        # The remaining operations are pointless if there are no roles to relocate
+        # Also this code prevents an HTTP error that occurs when trying to post an empty body
+        if len(message.role_mentions) == 0:
+            await message.channel.send('ERROR: No pinged roles to add to role group found!')
+            db_cursor.close()
+            db_conn.close()
+            return
+        for mention in message.role_mentions:
+            try:
+                role = db_cursor.execute(f"""
+                    SELECT * FROM RoleInfo WHERE role_id = {mention.id}
+                """).fetchone()
+                if role is None:
+                    await message.channel.send(f'ERROR: Role with id: {mention.id} '
+                                               f'has not been registered in a role group!')
+                    db_cursor.close()
+                    db_conn.close()
+                else:
+                    db_cursor.execute(f"""
+                        UPDATE RoleInfo SET group_id = {role_group[0]}
+                    """)
+                    message_content += f'Successful reassignment of role with id: {role.id} to role group: {role_group[1]}\n'
+            except Error as e:
+                await message.channel.send('ERROR: Unknown Error occurred during update operation!')
+                print(e)
+        try:
+            db_conn.commit()
+            await message.channel.send(message_content)
+        except Error as e:
+            await message.channel.send('ERROR: Unknown error occurred when saving changes to database!')
+            print(e)
+    except IndexError as e:
+        await message.channel.send("""
+            ERROR: Command must be in this format: reassrlestorg [group name] @role 1 @role 2 ...
+        """)
+        print(e)
+    except Error as e:
+        await message.channel.send('ERROR: Unknown error occurred!')
+        print(e)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def reassign_roles_to_role_group_by_id(params, message):
+    try:
+        role_group_name = params.pop(0)
+        db_conn = create_conn()
+        db_cursor = db_conn.cursor()
+        role_group = db_cursor.execute(f"""
+                    SELECT * FROM RoleGroups WHERE group_name = '{role_group_name}' AND guild_id = {message.guild.id}
+                """).fetchone()
+        # Cannot reassign a role to a non-existent role group
+        if role_group is None:
+            await message.channel.send(f'ERROR: Role Group: {role_group_name} does not exist!')
+            db_cursor.close()
+            db_conn.close()
+            return
+        message_content = ''
+        if len(params) == 0:
+            await message.channel.send('ERROR: No roles ids specified to add to role group found!')
+            db_cursor.close()
+            db_conn.close()
+            return
+        for role_id in params:
+            try:
+                role = db_cursor.execute(f"""
+                    SELECT * FROM RoleInfo WHERE role_id = {role_id}
+                """).fetchone()
+                if role is None:
+                    await message.channel.send(f'ERROR: Role with id: {role_id} '
+                                               f'has not been registered in a role group!')
+                    db_cursor.close()
+                    db_conn.close()
+                else:
+                    db_cursor.execute(f"""
+                        UPDATE RoleInfo SET group_id = {role_group[0]}
+                    """)
+                    message_content += f'Successful reassignment of role with id: {role.id} to role group: {role_group[1]}\n'
+            except Error as e:
+                await message.channel.send('ERROR: Unknown Error occurred during update operation!')
+                print(e)
+    except IndexError as e:
+        await message.channel.send("""
+            ERROR: Command must be in this format: reassrlestorgbyid [group name] [role id 1] [role id 2] ...
+        """)
+        print(e)
+    except Error as e:
+        await message.channel.send('ERROR: Unknown error occurred!')
+        print(e)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def delete_roles(params, message):
+    return
+
+
+async def delete_roles_by_id(params, message):
+    return
 
 
 async def leave_guild(message):

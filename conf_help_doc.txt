@@ -15,7 +15,7 @@ deleterg [group name]: Delete an existing role group under a certain name. [grou
 
 addrolestorg [role group name] @role1 @role2 ....: Add roles to a role group by pinging the roles that you wish
 						   to add to the group. [role group name] indicates the name of
-						   the role group you want to add these roles to
+						   the role group you want to add these pinged roles to
 
 addrolestorgbyid [role group name] [role id 1] [role id 2] ....: Adds roles to a role group by their numeric ids
 								 assigned by Discord. [role group name] indicates
@@ -23,3 +23,12 @@ addrolestorgbyid [role group name] [role id 1] [role id 2] ....: Adds roles to a
 								 [role id n] indicates the role id of the role
 								 you want to add to the role group. The id of a
 								 role is a numeric value assigned by Discord
+
+reassrlestorg [group name] @role 1 @role 2: Reassigns roles from one role group to the other. [group name] is
+					    the name of the role group to reasign the pinged roles to.
+
+reassrlestorgbyid [group name] [role id 1] [role id 2]: Reassigns roles from one role group to the other by
+							using their ids instead of pinging these roles.
+							[role id n] indicates the role id to assign to
+							another role group. Each role id must be a
+							unique numeric id which is assigned by Discord.

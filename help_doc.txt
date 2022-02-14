@@ -4,4 +4,8 @@ ranger help:
 
 !rgr help: Display this help menu.
 
-!rgr viewreqrg: Shows all required role groups for this server. 
+!rgr viewreqrg: Shows all required role groups for this server.
+
+!rgr leaveguild: Instructs the bot to leave the guild. This is prefferable over a kick/ban since this allows the bot to leave
+		 without the use of punitive action which would allow the bot to leave without being recorded in your moderator
+		 log or without it being permanently barred from your server.
