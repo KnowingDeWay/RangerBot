@@ -1,5 +1,5 @@
 import asyncio
-from sqlite3 import Error, IntegrityError
+from sqlite3 import IntegrityError
 import models
 import discord
 import sqlite3
@@ -33,7 +33,7 @@ def create_conn():
         conn = sqlite3.connect(DB_PATH)
         conn.cursor().execute('PRAGMA foreign_keys = ON')
         return conn
-    except Error as e:
+    except Exception as e:
         print(e)
         if conn:
             conn.close()
@@ -55,10 +55,14 @@ async def interpret_command(command, params, message):
 
 
 async def send_help(message, filename):
-    help_file = open(filename, 'r')
-    help_text = help_file.read()
-    help_file.close()
-    await message.channel.send(help_text)
+    try:
+        help_file = open(filename, 'r')
+        help_text = help_file.read()
+        help_file.close()
+        await message.channel.send(help_text)
+    except Exception as e:
+        await message.channel.send('ERROR: Unable to display help file!')
+        print(e)
 
 
 async def configure_bot(params, message):
@@ -69,8 +73,10 @@ async def configure_bot(params, message):
         case 'deleterg': await delete_role_group(params, message)
         case 'addrolestorg': await add_roles_to_role_group(params, message)
         case 'addrolestorgbyid': await add_roles_to_role_group_by_id(params, message)
-        case 'reassrlestorg': await  reassign_roles_to_role_group(params, message)
+        case 'reassrlestorg': await reassign_roles_to_role_group(params, message)
         case 'reassrlestorgbyid': await reassign_roles_to_role_group_by_id(params, message)
+        case 'delroles': await delete_roles(message)
+        case 'delrolesbyid': await delete_roles_by_id(params, message)
         case 'help': await send_help(message, 'conf_help_doc.txt')
 
 
@@ -101,7 +107,7 @@ async def add_required_role_group(params, message):
             Please make sure command is in the following format: addreqrg [name]
         """)
         print(e)
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Unable to add new role group record!')
         print(e)
     db_cursor.close()
@@ -117,7 +123,7 @@ async def view_required_role_groups(message):
                 SELECT * FROM RoleGroups WHERE guild_id = {message.guild.id} AND group_required = 1
             """)
         rows = db_cursor.fetchall()
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Failed to retrieve role groups for this server!')
         print(e)
     if len(rows) == 0:
@@ -184,7 +190,7 @@ async def edit_role_group(params, message):
             Please make sure command is in the following format: editrg [name] [new name] [group_required].
         """)
         print(e)
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Unable to edit record!')
         print(e)
     db_cursor.close()
@@ -214,7 +220,7 @@ async def delete_role_group(params, message):
             ERROR: Please make sure command is in the following format: deleterg [group name]
         """)
         print(e)
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Unexpected Error occurred while trying to delete this record')
         print(e)
     db_cursor.close()
@@ -256,13 +262,13 @@ async def add_roles_to_role_group(params, message):
             message_content += f'ERROR: Cannot add the same role (Role Name: {role.name}) ' \
                                + 'twice to various role groups!\n'
             print(e)
-        except Error as e:
+        except Exception as e:
             message_content += f'ERROR: Failed to add role with id: {role.id}\n'
             print(e)
     try:
         db_conn.commit()
         await message.channel.send(message_content)
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Database error occurred during commitment of database changes!')
         print(e)
     db_cursor.close()
@@ -294,11 +300,15 @@ async def add_roles_to_role_group_by_id(params, message):
     for role_id in params:
         try:
             role = message.guild.get_role(int(role_id))
-            db_cursor.execute(f"""
-                INSERT INTO RoleInfo (role_id, role_name, role_grouped, group_id)
-                VALUES({role_id}, '{role.name}', 1, {role_group[0]})
-            """)
-            message_content += f'Successful addition of role id: {role_id}\n'
+            # A client CANNOT add a role from another guild!
+            if role is not None:
+                db_cursor.execute(f"""
+                    INSERT INTO RoleInfo (role_id, role_name, role_grouped, group_id)
+                    VALUES({role_id}, '{role.name}', 1, {role_group[0]})
+                """)
+                message_content += f'Successful addition of role id: {role_id}\n'
+            else:
+                message_content += f'ERROR: The following role does not exist in this guild: {role_id}\n'
         except ValueError as e:
             message_content += f'ERROR: For Command: addrolestorgbyid [group name] [role id 1] [role id 2] ...' \
                             + f'Each role id MUST be an integer. Failed to add role id: {role_id}\n'
@@ -307,13 +317,13 @@ async def add_roles_to_role_group_by_id(params, message):
             message_content += f'ERROR: Cannot add the same role (Role Id: {role_id}) ' \
                                + 'twice to various role groups!\n'
             print(e)
-        except Error as e:
+        except Exception as e:
             message_content += f'ERROR: Failed to add role with id: {role_id}\n'
             print(e)
     try:
         db_conn.commit()
         await message.channel.send(message_content)
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Database error occurred during commitment of database changes!')
         print(e)
     db_cursor.close()
@@ -348,22 +358,20 @@ async def reassign_roles_to_role_group(params, message):
                     SELECT * FROM RoleInfo WHERE role_id = {mention.id}
                 """).fetchone()
                 if role is None:
-                    await message.channel.send(f'ERROR: Role with id: {mention.id} '
-                                               f'has not been registered in a role group!')
-                    db_cursor.close()
-                    db_conn.close()
+                    message_content += f'ERROR: Role with id: {mention.id} has not been registered in a role group!\n'
                 else:
                     db_cursor.execute(f"""
-                        UPDATE RoleInfo SET group_id = {role_group[0]}
+                        UPDATE RoleInfo SET group_id = {role_group[0]} WHERE role_id = {mention.id}
                     """)
-                    message_content += f'Successful reassignment of role with id: {role.id} to role group: {role_group[1]}\n'
-            except Error as e:
+                    message_content += f'Successful reassignment of role with id: {mention.id} ' \
+                                       f'to role group: {role_group[1]}\n'
+            except Exception as e:
                 await message.channel.send('ERROR: Unknown Error occurred during update operation!')
                 print(e)
         try:
             db_conn.commit()
             await message.channel.send(message_content)
-        except Error as e:
+        except Exception as e:
             await message.channel.send('ERROR: Unknown error occurred when saving changes to database!')
             print(e)
     except IndexError as e:
@@ -371,7 +379,7 @@ async def reassign_roles_to_role_group(params, message):
             ERROR: Command must be in this format: reassrlestorg [group name] @role 1 @role 2 ...
         """)
         print(e)
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Unknown error occurred!')
         print(e)
     db_cursor.close()
@@ -404,36 +412,115 @@ async def reassign_roles_to_role_group_by_id(params, message):
                     SELECT * FROM RoleInfo WHERE role_id = {role_id}
                 """).fetchone()
                 if role is None:
-                    await message.channel.send(f'ERROR: Role with id: {role_id} '
-                                               f'has not been registered in a role group!')
-                    db_cursor.close()
-                    db_conn.close()
+                    message_content += f'ERROR: Role with id: {role_id} has not been registered in a role group!\n'
                 else:
-                    db_cursor.execute(f"""
-                        UPDATE RoleInfo SET group_id = {role_group[0]}
-                    """)
-                    message_content += f'Successful reassignment of role with id: {role.id} to role group: {role_group[1]}\n'
-            except Error as e:
+                    guild_role = message.guild.get_role(int(role_id))
+                    if guild_role is None:
+                        message_content += f'ERROR: Role with id {role_id} does not exist in this guild!\n'
+                    else:
+                        db_cursor.execute(f"""
+                            UPDATE RoleInfo SET group_id = {role_group[0]} WHERE role_id = {role_id}
+                        """)
+                        message_content += f'Successful reassignment of role with id: {role_id} ' \
+                                           f'to role group: {role_group[1]}\n'
+            except Exception as e:
                 await message.channel.send('ERROR: Unknown Error occurred during update operation!')
                 print(e)
+        try:
+            db_conn.commit()
+            await message.channel.send(message_content)
+        except Exception as e:
+            await message.channel.send('ERROR: Unknown error occurred when saving changes to database!')
+            print(e)
     except IndexError as e:
         await message.channel.send("""
             ERROR: Command must be in this format: reassrlestorgbyid [group name] [role id 1] [role id 2] ...
         """)
         print(e)
-    except Error as e:
+    except Exception as e:
         await message.channel.send('ERROR: Unknown error occurred!')
         print(e)
     db_cursor.close()
     db_conn.close()
 
 
-async def delete_roles(params, message):
-    return
+async def delete_roles(message):
+    try:
+        db_conn = create_conn()
+        db_cursor = db_conn.cursor()
+        message_content = ''
+        if len(message.role_mentions) == 0:
+            await message.channel.send('ERROR: No pinged roles specified for deletion!')
+            return
+        for mentions in message.role_mentions:
+            try:
+                role = db_cursor.execute(f"""
+                    SELECT * FROM RoleInfo WHERE role_id = {mentions.id}
+                """).fetchone()
+                if role is None:
+                    message_content += f'ERROR: Role with id: {mentions.id} has not been registered in this system!'
+                else:
+                    db_cursor.execute(f"""
+                        DELETE FROM RoleInfo WHERE role_id = {mentions.id}
+                    """)
+                    message_content += f'Successful deletion of role with id: {mentions.id}\n'
+            except Exception as e:
+                message_content += f'ERROR: Unknown error occurred when trying to delete role with id: {mentions.id}\n'
+                print(e)
+        try:
+            db_conn.commit()
+            await message.channel.send(message_content)
+        except Exception as e:
+            await message.channel.send('ERROR: Unknown error occurred when saving changes to database!')
+            print(e)
+    except Exception as e:
+        await message.channel.send('ERROR: Unknown Error occurred during delete operation!')
+        print(e)
+    db_cursor.close()
+    db_conn.close()
 
 
 async def delete_roles_by_id(params, message):
-    return
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    try:
+        message_content = ''
+        for param in params:
+            try:
+                role_id = int(param)
+                role = db_cursor.execute(f"""
+                    SELECT * FROM RoleInfo WHERE role_id = {role_id}
+                """).fetchone()
+                if role is None:
+                    message_content += f'ERROR: Role with id: {role_id} does not exist in the system!\n'
+                else:
+                    guild_role = message.guild.get_role(int(role_id))
+                    if guild_role is None:
+                        message_content += f'ERROR: Role with id: {role_id} has not been registered in a role group!\n'
+                    else:
+                        db_cursor.execute(f"""
+                            DELETE FROM RoleInfo WHERE role_id = {role_id}
+                        """)
+                        message_content += f'Successful deletion of role with id: {role_id}\n'
+            except ValueError as e:
+                message_content += f'ERROR: Role with id: {param} is NOT Numeric!\n'
+                print(e)
+            except Exception as e:
+                message_content += f'ERROR: Unknown Error when adding role id: {role_id}\n'
+                print(e)
+        try:
+            db_conn.commit()
+            await message.channel.send(message_content)
+        except Exception as e:
+            await message.channel.send('ERROR: Unknown database error occurred when saving changes!')
+            print(e)
+    except IndexError as e:
+        await message.channel.send("""
+            ERROR: Ensure that the command is in the following format: delrolesbyid [role id 1] [role id 2] ...
+        """)
+        print(e)
+    db_cursor.close()
+    db_conn.close()
 
 
 async def leave_guild(message):

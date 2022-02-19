@@ -32,3 +32,10 @@ reassrlestorgbyid [group name] [role id 1] [role id 2]: Reassigns roles from one
 							[role id n] indicates the role id to assign to
 							another role group. Each role id must be a
 							unique numeric id which is assigned by Discord.
+
+delroles @role1 @role2 ....: Deletes the following pinged roles from the system and from the role group
+
+delrolesbyid [role id 1] [role id 2] ....: Deletes a list of specified roles from the system by their id.
+					   [role id n] is the id of the role you wish to delete from the
+					   system. Each role id MUST be unique and numeric and is assigned
+					   by Discord. 
