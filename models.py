@@ -1,3 +1,6 @@
+from enum import Enum
+
+
 class Server:
     def __init__(self, guild_id, guild_name):
         self.guild_id = guild_id
@@ -18,3 +21,18 @@ class RoleInfo:
         self.role_name = role_name
         self.role_grouped = role_grouped
         self.group_id = group_id
+
+
+class DataType(Enum):
+    INTEGER = 0
+    REAL = 1
+    TEXT = 2
+    BOOLEAN = 3
+
+
+class ModAction(Enum):
+    KICK = 0
+    BAN = 1
+    MUTE = 2
+    WARN = 3
+

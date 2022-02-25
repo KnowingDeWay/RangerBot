@@ -1,6 +1,6 @@
 import asyncio
 from sqlite3 import IntegrityError
-import models
+from models import RoleGroup, DataType, ModAction
 import discord
 import sqlite3
 import os
@@ -17,6 +17,9 @@ def load_token():
 TOKEN = load_token()
 BOT_CMD_INDICATOR = '!rgr '
 DB_PATH = 'ranger_db.db'
+RESERVED_CONFIG_PREFIX = 'sys'
+CONFIG_VAR_RG_MOD_ACTION = f'{RESERVED_CONFIG_PREFIX}_rg_mod_action'
+CONFIG_VAR_RG_ENFORCEMENT_PERIOD = f'{RESERVED_CONFIG_PREFIX}_rg_enf_period'
 
 client = discord.Client()
 
@@ -50,6 +53,12 @@ async def interpret_command(command, params, message):
             await view_required_role_groups(message)
         case 'leaveguild':
             await leave_guild(message)
+        case 'viewroles':
+            await view_registered_roles(message)
+        case 'viewrolesrg':
+            await view_roles_for_rolegroup(params, message)
+        case 'enforcerg':
+            await enforce_mod_action_required_roles(params, message)
         case _:
             await message.channel.send('ERROR: Unknown Command!')
 
@@ -135,7 +144,7 @@ async def view_required_role_groups(message):
         role_groups = []
         message_content = ''
         for row in rows:
-            role_group = models.RoleGroup(row[0], row[1], row[2], row[3])
+            role_group = RoleGroup(row[0], row[1], row[2], row[3])
             role_groups.append(role_group)
         item_number = 1
         for role_group in role_groups:
@@ -331,10 +340,10 @@ async def add_roles_to_role_group_by_id(params, message):
 
 
 async def reassign_roles_to_role_group(params, message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
     try:
         role_group_name = params.pop(0)
-        db_conn = create_conn()
-        db_cursor = db_conn.cursor()
         role_group = db_cursor.execute(f"""
             SELECT * FROM RoleGroups WHERE group_name = '{role_group_name}' AND guild_id = {message.guild.id}
         """).fetchone()
@@ -387,10 +396,10 @@ async def reassign_roles_to_role_group(params, message):
 
 
 async def reassign_roles_to_role_group_by_id(params, message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
     try:
         role_group_name = params.pop(0)
-        db_conn = create_conn()
-        db_cursor = db_conn.cursor()
         role_group = db_cursor.execute(f"""
                     SELECT * FROM RoleGroups WHERE group_name = '{role_group_name}' AND guild_id = {message.guild.id}
                 """).fetchone()
@@ -445,9 +454,9 @@ async def reassign_roles_to_role_group_by_id(params, message):
 
 
 async def delete_roles(message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
     try:
-        db_conn = create_conn()
-        db_cursor = db_conn.cursor()
         message_content = ''
         if len(message.role_mentions) == 0:
             await message.channel.send('ERROR: No pinged roles specified for deletion!')
@@ -506,7 +515,7 @@ async def delete_roles_by_id(params, message):
                 message_content += f'ERROR: Role with id: {param} is NOT Numeric!\n'
                 print(e)
             except Exception as e:
-                message_content += f'ERROR: Unknown Error when adding role id: {role_id}\n'
+                message_content += f'ERROR: Unknown Error when adding role id: {param}\n'
                 print(e)
         try:
             db_conn.commit()
@@ -550,6 +559,130 @@ async def leave_guild(message):
                 """)
     except asyncio.TimeoutError as e:
         await message.channel.send('ERROR: The operation has been cancelled due to timeout!')
+        print(e)
+
+
+async def view_registered_roles(message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    message_content = ''
+    role_no = 1
+    try:
+        roles = db_cursor.execute(f"""
+            SELECT * FROM RoleInfo WHERE group_id IN (SELECT group_id FROM RoleGroups 
+            WHERE guild_id = {message.guild.id})
+        """).fetchall()
+        for role in roles:
+            role_grouped = 'Yes' if role[2] == 1 else 'No'
+            message_content += f'{role_no}. Role Id: {role[0]}, Name: {role[1]}, Role Grouped: {role_grouped}\n'
+            role_no += 1
+        await message.channel.send(message_content)
+    except Exception as e:
+        await message.channel.send('ERROR: An error occurred while trying to view the registered roles of the guild')
+        print(e)
+
+
+async def view_roles_for_rolegroup(params, message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    try:
+        group_name = params.pop(0)
+        message_content = ''
+        role_no = 1
+        role_group = db_cursor.execute(f"""
+            SELECT * FROM RoleGroups WHERE group_name = '{group_name}' AND guild_id = {message.guild.id} 
+        """).fetchone()
+        if role_group is None:
+            await message.channel.send(f'ERROR: Could not found role group: {group_name}')
+            db_cursor.close()
+            db_conn.close()
+            return
+        else:
+            group_roles = db_cursor.execute(f"""
+                SELECT * FROM RoleInfo WHERE group_id = {role_group[0]} 
+            """).fetchall()
+            if len(group_roles) == 0:
+                await message.channel.send('NOTE: No role groups found for this role group')
+                db_cursor.close()
+                db_conn.close()
+                return
+            else:
+                for role in group_roles:
+                    message_content += f'{role_no}. Role Id: {role[0]}, Role Name: {role[1]}\n'
+                    role_no += 1
+                await message.channel.send(message_content)
+    except IndexError as e:
+        await message.channel.send('ERROR: Command must be in the form of: viewrolesrg [role group name]')
+        db_cursor.close()
+        db_conn.close()
+        print(e)
+    except Exception as e:
+        await message.channel.send('ERROR: Unknown error occurred during this operation!')
+        db_cursor.close()
+        db_conn.close()
+        print(e)
+
+
+def interpret_mod_action(mod_action):
+    match mod_action:
+        case ModAction.BAN: return 'banned'
+        case ModAction.KICK: return 'kicked'
+        case ModAction.MUTE: return 'muted'
+        case ModAction.WARN: return 'warned'
+
+
+async def enforce_mod_action_required_roles(params, message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    try:
+        # Mod action can be 'kick', 'ban', 'mute' or 'warn'
+        mod_action = params.pop(0)
+        # Enforcement period is given in hours
+        enforcement_period = params.pop(0)
+        if hasattr(ModAction, mod_action.upper()):
+            mod_action_enum = ModAction[mod_action.upper()]
+            enf_period_num = float(enforcement_period)
+            db_cursor.execute(f"""
+                INSERT INTO Configuration (var_name, value, value_type, guild_id) 
+                VALUES('{CONFIG_VAR_RG_MOD_ACTION}', '{mod_action_enum.value}', {DataType.INTEGER.value}, {message.guild.id})
+            """)
+            db_cursor.execute(f"""
+                INSERT INTO Configuration (var_name, value, value_type, guild_id) 
+                VALUES('{CONFIG_VAR_RG_ENFORCEMENT_PERIOD}', '{enf_period_num}', {DataType.REAL.value}, {message.guild.id})
+            """)
+            try:
+                db_conn.commit()
+                await message.channel.send(f"""
+                    Successfully created enforcement rule for kicking members without required roles.
+                    Members who DO NOT have the required roles will be {interpret_mod_action(mod_action_enum)}
+                    every {enforcement_period} hours. You can change this at any time by re-running this command
+                """)
+            except Exception as e:
+                await message.channel.send('ERROR: Error occurred while committing changes to database!')
+                print(e)
+        else:
+            await message.channel.send("""
+                ERROR: Invalid mod action, mod action must be: 'ban', 'kick', 'mute' or 'warn'
+            """)
+            db_cursor.close()
+            db_conn.close()
+            return
+    except IndexError as e:
+        await message.channel.send("""
+            ERROR: Command must be in the form: enforcerg [mod action] [enforcement period (in hours)]
+        """)
+        db_cursor.close()
+        db_conn.close()
+        print(e)
+    except ValueError as e:
+        await message.channel.send('ERROR: Enforcement period MUST be numeric!')
+        db_cursor.close()
+        db_conn.close()
+        print(e)
+    except Exception as e:
+        await message.channel.send('ERROR: Unknown error occurred during this operation!')
+        db_cursor.close()
+        db_conn.close()
         print(e)
 
 

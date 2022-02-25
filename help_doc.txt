@@ -9,3 +9,14 @@ ranger help:
 !rgr leaveguild: Instructs the bot to leave the guild. This is prefferable over a kick/ban since this allows the bot to leave
 		 without the use of punitive action which would allow the bot to leave without being recorded in your moderator
 		 log or without it being permanently barred from your server.
+
+!rgr viewroles: Views all roles registered for this server in the database of this bot
+
+!rgr viewrolesrg [role group name]: Gets and shows all the roles registered in a rolegroup
+
+!rgr enforcerg [mod action] [enforcement period (hours)]: Enforces a rule on all server members to have the required roles registered 
+							  in the system. Failiure to do so will result in the selected [mod action] 
+							  taking place. The values for [mod action] can be: 'kick', 'ban', 'mute'
+							  or 'warn'. The [enforcement period] is the number of hours from either the
+							  issuing of this command or from the last sweep, to look for members without
+							  required roles
