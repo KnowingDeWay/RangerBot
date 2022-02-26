@@ -28,6 +28,7 @@ class DataType(Enum):
     REAL = 1
     TEXT = 2
     BOOLEAN = 3
+    DATE = 4
 
 
 class ModAction(Enum):

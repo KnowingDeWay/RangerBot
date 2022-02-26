@@ -2,9 +2,10 @@ import asyncio
 from sqlite3 import IntegrityError
 from models import RoleGroup, DataType, ModAction
 import discord
-import sqlite3
-import os
 import apputil
+from apputil import create_conn
+import threading
+import datetime
 
 
 def load_token():
@@ -20,27 +21,9 @@ DB_PATH = 'ranger_db.db'
 RESERVED_CONFIG_PREFIX = 'sys'
 CONFIG_VAR_RG_MOD_ACTION = f'{RESERVED_CONFIG_PREFIX}_rg_mod_action'
 CONFIG_VAR_RG_ENFORCEMENT_PERIOD = f'{RESERVED_CONFIG_PREFIX}_rg_enf_period'
+CONFIG_VAR_RG_ENFORCEMENT_DEADLINE = f'{RESERVED_CONFIG_PREFIX}_rg_enf_deadline'
 
 client = discord.Client()
-
-
-def create_conn():
-    conn = None
-    try:
-        if os.path.exists(DB_PATH):
-            conn = sqlite3.connect(DB_PATH)
-            conn.cursor().execute('PRAGMA foreign_keys = ON')
-            return conn
-        new_db_file = open(DB_PATH, 'w')
-        new_db_file.close()
-        conn = sqlite3.connect(DB_PATH)
-        conn.cursor().execute('PRAGMA foreign_keys = ON')
-        return conn
-    except Exception as e:
-        print(e)
-        if conn:
-            conn.close()
-        return None
 
 
 async def interpret_command(command, params, message):
@@ -642,18 +625,44 @@ async def enforce_mod_action_required_roles(params, message):
         if hasattr(ModAction, mod_action.upper()):
             mod_action_enum = ModAction[mod_action.upper()]
             enf_period_num = float(enforcement_period)
-            db_cursor.execute(f"""
-                INSERT INTO Configuration (var_name, value, value_type, guild_id) 
-                VALUES('{CONFIG_VAR_RG_MOD_ACTION}', '{mod_action_enum.value}', {DataType.INTEGER.value}, {message.guild.id})
-            """)
-            db_cursor.execute(f"""
-                INSERT INTO Configuration (var_name, value, value_type, guild_id) 
-                VALUES('{CONFIG_VAR_RG_ENFORCEMENT_PERIOD}', '{enf_period_num}', {DataType.REAL.value}, {message.guild.id})
-            """)
+            if apputil.get_config_var(CONFIG_VAR_RG_MOD_ACTION, message.guild.id) is None:
+                db_cursor.execute(f"""
+                    INSERT INTO Configuration (var_name, value, value_type, guild_id) 
+                    VALUES('{CONFIG_VAR_RG_MOD_ACTION}', '{mod_action_enum.value}', {DataType.INTEGER.value}, 
+                    {message.guild.id})
+                """)
+            else:
+                db_cursor.execute(f"""
+                    UPDATE Configuration SET value = {mod_action_enum.value} 
+                    WHERE var_name = '{CONFIG_VAR_RG_MOD_ACTION}' AND guild_id = {message.guild.id}
+                """)
+            if apputil.get_config_var(CONFIG_VAR_RG_ENFORCEMENT_PERIOD, message.guild.id) is None:
+                db_cursor.execute(f"""
+                    INSERT INTO Configuration (var_name, value, value_type, guild_id) 
+                    VALUES('{CONFIG_VAR_RG_ENFORCEMENT_PERIOD}', '{enf_period_num}', {DataType.REAL.value}, 
+                    {message.guild.id})
+                """)
+            else:
+                db_cursor.execute(f"""
+                    UPDATE Configuration SET value = {enf_period_num} 
+                    WHERE var_name = '{CONFIG_VAR_RG_ENFORCEMENT_PERIOD}' AND guild_id = {message.guild.id}
+                """)
+            if apputil.get_config_var(CONFIG_VAR_RG_ENFORCEMENT_DEADLINE, message.guild.id) is None:
+                db_cursor.execute(f"""
+                    INSERT INTO Configuration (var_name, value, value_type, guild_id)
+                    VALUES('{CONFIG_VAR_RG_ENFORCEMENT_DEADLINE}', 
+                    '{datetime.date.today() + datetime.timedelta(hours=enf_period_num)}', {DataType.DATE.value}
+                    , {message.guild.id})
+                """)
+            else:
+                db_cursor.execute(f"""
+                    UPDATE Configuration SET value = {datetime.date.today() + datetime.timedelta(hours=enf_period_num)} 
+                    WHERE var_name = '{CONFIG_VAR_RG_ENFORCEMENT_DEADLINE}' AND guild_id = {message.guild.id}
+                """)
             try:
                 db_conn.commit()
                 await message.channel.send(f"""
-                    Successfully created enforcement rule for kicking members without required roles.
+                    Successfully created/updated enforcement rule for kicking members without required roles.
                     Members who DO NOT have the required roles will be {interpret_mod_action(mod_action_enum)}
                     every {enforcement_period} hours. You can change this at any time by re-running this command
                 """)
@@ -686,6 +695,18 @@ async def enforce_mod_action_required_roles(params, message):
         print(e)
 
 
+async def sweep_servers():
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    server_job_queues = []
+    parallel_servers = 0
+    max_parallel_threads = 10
+    server_throughput = 100
+    servers = db_cursor.execute(f"""
+        SELECT * FROM Servers WHERE 
+    """)
+
+
 @client.event
 async def on_ready():
     db_conn = create_conn()
@@ -699,6 +720,8 @@ async def on_ready():
     db_cursor.executescript(init_sql_comm)
     db_cursor.close()
     db_conn.close()
+    # sweep_thread = threading.Thread(target=sweep_servers)
+    # sweep_thread.start()
 
 
 @client.event
