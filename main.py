@@ -1,11 +1,15 @@
 import asyncio
+import this
+import threading
 from sqlite3 import IntegrityError
+
+import models
 from models import RoleGroup, DataType, ModAction
 import discord
 import apputil
 from apputil import create_conn
-import threading
-import datetime
+from threading import Thread
+from datetime import datetime, timedelta
 
 
 def load_token():
@@ -22,8 +26,9 @@ RESERVED_CONFIG_PREFIX = 'sys'
 CONFIG_VAR_RG_MOD_ACTION = f'{RESERVED_CONFIG_PREFIX}_rg_mod_action'
 CONFIG_VAR_RG_ENFORCEMENT_PERIOD = f'{RESERVED_CONFIG_PREFIX}_rg_enf_period'
 CONFIG_VAR_RG_ENFORCEMENT_DEADLINE = f'{RESERVED_CONFIG_PREFIX}_rg_enf_deadline'
+CONFIG_VAR_RG_PUNISH_MESSAGE = f'{RESERVED_CONFIG_PREFIX}_rg_punish_reason'
 
-client = discord.Client()
+client = discord.Client(intents=discord.Intents.all())
 
 
 async def interpret_command(command, params, message):
@@ -42,6 +47,8 @@ async def interpret_command(command, params, message):
             await view_roles_for_rolegroup(params, message)
         case 'enforcerg':
             await enforce_mod_action_required_roles(params, message)
+        case 'sweepserver':
+            await sweep_server(message)
         case _:
             await message.channel.send('ERROR: Unknown Command!')
 
@@ -69,6 +76,7 @@ async def configure_bot(params, message):
         case 'reassrlestorgbyid': await reassign_roles_to_role_group_by_id(params, message)
         case 'delroles': await delete_roles(message)
         case 'delrolesbyid': await delete_roles_by_id(params, message)
+        case 'setpunishmsg': await set_punish_message(params, message)
         case 'help': await send_help(message, 'conf_help_doc.txt')
 
 
@@ -651,12 +659,12 @@ async def enforce_mod_action_required_roles(params, message):
                 db_cursor.execute(f"""
                     INSERT INTO Configuration (var_name, value, value_type, guild_id)
                     VALUES('{CONFIG_VAR_RG_ENFORCEMENT_DEADLINE}', 
-                    '{datetime.date.today() + datetime.timedelta(hours=enf_period_num)}', {DataType.DATE.value}
+                    '{datetime.utcnow() + timedelta(hours=enf_period_num)}', {DataType.DATE.value}
                     , {message.guild.id})
                 """)
             else:
                 db_cursor.execute(f"""
-                    UPDATE Configuration SET value = {datetime.date.today() + datetime.timedelta(hours=enf_period_num)} 
+                    UPDATE Configuration SET value = '{datetime.utcnow() + timedelta(hours=enf_period_num)}' 
                     WHERE var_name = '{CONFIG_VAR_RG_ENFORCEMENT_DEADLINE}' AND guild_id = {message.guild.id}
                 """)
             try:
@@ -695,16 +703,113 @@ async def enforce_mod_action_required_roles(params, message):
         print(e)
 
 
-async def sweep_servers():
+def search_for_role_by_id(role_id, roles):
+    for role in roles:
+        if role.id == role_id:
+            return role
+    return None
+
+
+async def execute_mod_action(guild_id, mod_action, member):
     db_conn = create_conn()
     db_cursor = db_conn.cursor()
-    server_job_queues = []
-    parallel_servers = 0
-    max_parallel_threads = 10
-    server_throughput = 100
-    servers = db_cursor.execute(f"""
-        SELECT * FROM Servers WHERE 
-    """)
+    try:
+        punish_message_config = db_cursor.execute(f"""
+            SELECT * FROM Configuration WHERE guild_id = {guild_id} AND var_name = '{CONFIG_VAR_RG_PUNISH_MESSAGE}'
+        """).fetchone()
+        guild = client.get_guild(guild_id)
+        if mod_action != 3:
+            await member.send(content=f"""
+            You have been {interpret_mod_action(ModAction(mod_action))} from {guild.name}
+            Reason: {punish_message_config[2]}
+            """)
+        match mod_action:
+            case 0: await guild.kick(member, reason=f"{punish_message_config[2]}")
+            case 1: await guild.ban(member, reason=f"{punish_message_config[2]}")
+            case 2: await member.edit(reason=f"{punish_message_config[2]}", mute=True)
+            case 3: await warn_member(member, f"{punish_message_config[2]}")
+    except Exception as e:
+        print(e)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def warn_member(member, warn_text):
+    await member.send(warn_text)
+
+
+async def create_embed_message(message_text, message_title, message):
+    message_embed = discord.Embed(title=message_title)
+    message_embed.description
+
+
+async def sweep_server(message):
+    server = models.Server(message.guild.id, message.guild.name)
+    await enact_mod_action(server, message)
+
+
+async def enact_mod_action(server, message):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    role_groups = db_cursor.execute(f"""
+        SELECT * FROM RoleGroups WHERE guild_id = {server.guild_id}
+    """).fetchall()
+    mod_action = db_cursor.execute(f"""
+        SELECT * FROM Configuration WHERE guild_id = {server.guild_id} AND var_name = '{CONFIG_VAR_RG_MOD_ACTION}'
+    """).fetchone()
+    enforcement_period = db_cursor.execute(f"""
+        SELECT value FROM Configuration WHERE guild_id = {server.guild_id} AND 
+        var_name = '{CONFIG_VAR_RG_ENFORCEMENT_PERIOD}'
+    """).fetchone()
+    enforcement_period = float(enforcement_period[0])
+    server_entity = client.get_guild(server.guild_id)
+    members = server_entity.fetch_members()
+    async for member in members:
+        if member.id is not server_entity.owner_id and member.id is not client.user.id:
+            for group in role_groups:
+                roles = db_cursor.execute(f"""
+                SELECT * FROM RoleInfo WHERE group_id = {group[0]}""")
+                has_role_in_group = False
+                for role in roles:
+                    discord_role = search_for_role_by_id(role[0], member.roles)
+                    if discord_role is not None:
+                        has_role_in_group = True
+                if not has_role_in_group:
+                    if member.joined_at <= datetime.utcnow() - timedelta(hours=enforcement_period):
+                        await execute_mod_action(server.guild_id, int(mod_action[2]), member)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def set_punish_message(punish_message, message):
+    config_msg = ''
+    param_len = len(punish_message)
+    for count in range(0, param_len):
+        config_msg += punish_message[count]
+        if count is not param_len - 1:
+            config_msg += ' '
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    punish_message_config_var = db_cursor.execute(f"""
+        SELECT * FROM Configuration WHERE guild_id = {message.guild.id} AND var_name = '{CONFIG_VAR_RG_PUNISH_MESSAGE}'
+    """).fetchone()
+    if punish_message_config_var is None:
+        db_cursor.execute(f"""
+            INSERT INTO Configuration (var_name, value, value_type, guild_id) 
+            VALUES ('{CONFIG_VAR_RG_PUNISH_MESSAGE}', '{config_msg}', 2, {message.guild.id})
+        """)
+    else:
+        db_cursor.execute(f"""
+            UPDATE Configuration SET value = '{config_msg}' WHERE guild_id = {message.guild.id}
+        """)
+    try:
+        db_conn.commit()
+        await message.channel.send(f'Successfully added punish message: {config_msg}')
+    except Exception as e:
+        await message.channel.send('ERROR: Unable to set new config message!')
+        print(e)
+    db_cursor.close()
+    db_conn.close()
 
 
 @client.event
@@ -720,8 +825,6 @@ async def on_ready():
     db_cursor.executescript(init_sql_comm)
     db_cursor.close()
     db_conn.close()
-    # sweep_thread = threading.Thread(target=sweep_servers)
-    # sweep_thread.start()
 
 
 @client.event
