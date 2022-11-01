@@ -1,4 +1,5 @@
 import asyncio
+import math
 import this
 import threading
 from sqlite3 import IntegrityError
@@ -27,6 +28,9 @@ CONFIG_VAR_RG_MOD_ACTION = f'{RESERVED_CONFIG_PREFIX}_rg_mod_action'
 CONFIG_VAR_RG_ENFORCEMENT_PERIOD = f'{RESERVED_CONFIG_PREFIX}_rg_enf_period'
 CONFIG_VAR_RG_ENFORCEMENT_DEADLINE = f'{RESERVED_CONFIG_PREFIX}_rg_enf_deadline'
 CONFIG_VAR_RG_PUNISH_MESSAGE = f'{RESERVED_CONFIG_PREFIX}_rg_punish_reason'
+HELP_COMMANDS_PER_PAGE = 5
+
+bot_help_pages = []
 
 client = discord.Client(intents=discord.Intents.all())
 
@@ -36,7 +40,7 @@ async def interpret_command(command, params, message):
         case 'conf':
             await configure_bot(params, message)
         case 'help':
-            await send_help(message, 'help_doc.txt')
+            await create_help_message(0, message)
         case 'viewreqrg':
             await view_required_role_groups(message)
         case 'leaveguild':
@@ -67,17 +71,28 @@ async def send_help(message, filename):
 async def configure_bot(params, message):
     sub_comm = params.pop(0)
     match sub_comm:
-        case 'addreqrg': await add_required_role_group(params, message)
-        case 'editrg': await edit_role_group(params, message)
-        case 'deleterg': await delete_role_group(params, message)
-        case 'addrolestorg': await add_roles_to_role_group(params, message)
-        case 'addrolestorgbyid': await add_roles_to_role_group_by_id(params, message)
-        case 'reassrlestorg': await reassign_roles_to_role_group(params, message)
-        case 'reassrlestorgbyid': await reassign_roles_to_role_group_by_id(params, message)
-        case 'delroles': await delete_roles(message)
-        case 'delrolesbyid': await delete_roles_by_id(params, message)
-        case 'setpunishmsg': await set_punish_message(params, message)
-        case 'help': await send_help(message, 'conf_help_doc.txt')
+        case 'addreqrg':
+            await add_required_role_group(params, message)
+        case 'editrg':
+            await edit_role_group(params, message)
+        case 'deleterg':
+            await delete_role_group(params, message)
+        case 'addrolestorg':
+            await add_roles_to_role_group(params, message)
+        case 'addrolestorgbyid':
+            await add_roles_to_role_group_by_id(params, message)
+        case 'reassrlestorg':
+            await reassign_roles_to_role_group(params, message)
+        case 'reassrlestorgbyid':
+            await reassign_roles_to_role_group_by_id(params, message)
+        case 'delroles':
+            await delete_roles(message)
+        case 'delrolesbyid':
+            await delete_roles_by_id(params, message)
+        case 'setpunishmsg':
+            await set_punish_message(params, message)
+        case 'help':
+            await create_help_message(1, message)
 
 
 async def add_required_role_group(params, message):
@@ -311,7 +326,7 @@ async def add_roles_to_role_group_by_id(params, message):
                 message_content += f'ERROR: The following role does not exist in this guild: {role_id}\n'
         except ValueError as e:
             message_content += f'ERROR: For Command: addrolestorgbyid [group name] [role id 1] [role id 2] ...' \
-                            + f'Each role id MUST be an integer. Failed to add role id: {role_id}\n'
+                               + f'Each role id MUST be an integer. Failed to add role id: {role_id}\n'
             print(e)
         except IntegrityError as e:
             message_content += f'ERROR: Cannot add the same role (Role Id: {role_id}) ' \
@@ -616,10 +631,14 @@ async def view_roles_for_rolegroup(params, message):
 
 def interpret_mod_action(mod_action):
     match mod_action:
-        case ModAction.BAN: return 'banned'
-        case ModAction.KICK: return 'kicked'
-        case ModAction.MUTE: return 'muted'
-        case ModAction.WARN: return 'warned'
+        case ModAction.BAN:
+            return 'banned'
+        case ModAction.KICK:
+            return 'kicked'
+        case ModAction.MUTE:
+            return 'muted'
+        case ModAction.WARN:
+            return 'warned'
 
 
 async def enforce_mod_action_required_roles(params, message):
@@ -724,10 +743,14 @@ async def execute_mod_action(guild_id, mod_action, member):
             Reason: {punish_message_config[2]}
             """)
         match mod_action:
-            case 0: await guild.kick(member, reason=f"{punish_message_config[2]}")
-            case 1: await guild.ban(member, reason=f"{punish_message_config[2]}")
-            case 2: await member.edit(reason=f"{punish_message_config[2]}", mute=True)
-            case 3: await warn_member(member, f"{punish_message_config[2]}")
+            case 0:
+                await guild.kick(member, reason=f"{punish_message_config[2]}")
+            case 1:
+                await guild.ban(member, reason=f"{punish_message_config[2]}")
+            case 2:
+                await member.edit(reason=f"{punish_message_config[2]}", mute=True)
+            case 3:
+                await warn_member(member, f"{punish_message_config[2]}")
     except Exception as e:
         print(e)
     db_cursor.close()
@@ -738,9 +761,67 @@ async def warn_member(member, warn_text):
     await member.send(warn_text)
 
 
-async def create_embed_message(message_text, message_title, message):
-    message_embed = discord.Embed(title=message_title)
-    message_embed.description
+def construct_help_pages(help_command_type):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    bot_help_pages.clear()
+    help_commands_count = db_cursor.execute(f"""
+            SELECT COUNT(*) FROM HelpCommands WHERE command_type = {help_command_type}
+        """).fetchone()
+    page_count = math.ceil(help_commands_count[0] / HELP_COMMANDS_PER_PAGE)
+    for x in range(1, page_count + 1):
+        curr_embed = discord.Embed(title=f'Help Commands - Page {x}')
+        help_commands = db_cursor.execute(f"""
+                WITH commands AS (
+                    SELECT *, row_number() over(order by '') AS row_num FROM HelpCommands 
+                    WHERE command_type = {help_command_type}
+                )
+                SELECT * FROM commands WHERE row_num >= {x} + ({x} - 1) * {HELP_COMMANDS_PER_PAGE} - ({x} - 1) 
+                AND row_num <= {x} * 5
+            """).fetchall()
+        for command in help_commands:
+            curr_embed.add_field(name=command[1], value=command[2])
+        bot_help_pages.append(curr_embed)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def create_help_message(help_command_type, message):
+    construct_help_pages(help_command_type)
+    buttons = [u"\u23EA", u"\u25C0", u"\u25B6", u"\u23E9"]
+    current_page = 0
+    msg = await message.channel.send(embed=bot_help_pages[current_page])
+    for button in buttons:
+        await msg.add_reaction(button)
+    while True:
+        try:
+            reaction, user = await client.wait_for("reaction_add",
+                                                   check=lambda react, usr:
+                                                   usr == message.author and react.emoji in buttons,
+                                                   timeout=60)
+        except asyncio.TimeoutError as e:
+            embed = bot_help_pages[current_page]
+            embed.set_footer(text='Timed Out')
+            await msg.clear_reactions()
+            print(e)
+        except Exception as e:
+            print(e)
+        else:
+            previous_page = current_page
+            if reaction.emoji == buttons[0]:
+                current_page = 0
+            elif reaction.emoji == buttons[1]:
+                if current_page >= 0:
+                    current_page -= 1
+            elif reaction.emoji == buttons[2]:
+                if current_page < len(bot_help_pages) - 1:
+                    current_page += 1
+            elif reaction.emoji == buttons[3]:
+                current_page = len(bot_help_pages) - 1
+            for button in buttons:
+                await msg.remove_reaction(button, message.author)
+            if current_page != previous_page:
+                await msg.edit(embed=bot_help_pages[current_page])
 
 
 async def sweep_server(message):

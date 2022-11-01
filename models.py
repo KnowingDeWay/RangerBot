@@ -37,3 +37,8 @@ class ModAction(Enum):
     MUTE = 2
     WARN = 3
 
+
+class CommandType(Enum):
+    MAIN = 0
+    CONF = 1
+
