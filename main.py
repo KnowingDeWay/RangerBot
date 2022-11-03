@@ -29,8 +29,10 @@ CONFIG_VAR_RG_ENFORCEMENT_PERIOD = f'{RESERVED_CONFIG_PREFIX}_rg_enf_period'
 CONFIG_VAR_RG_ENFORCEMENT_DEADLINE = f'{RESERVED_CONFIG_PREFIX}_rg_enf_deadline'
 CONFIG_VAR_RG_PUNISH_MESSAGE = f'{RESERVED_CONFIG_PREFIX}_rg_punish_reason'
 HELP_COMMANDS_PER_PAGE = 5
+PUNISHED_USERS_PER_PAGE = 10
 
 bot_help_pages = []
+bot_role_report_pages = []
 
 client = discord.Client(intents=discord.Intents.all())
 
@@ -53,6 +55,8 @@ async def interpret_command(command, params, message):
             await enforce_mod_action_required_roles(params, message)
         case 'sweepserver':
             await sweep_server(message)
+        case 'showrolereport':
+            await show_role_punish_report(message)
         case _:
             await message.channel.send('ERROR: Unknown Command!')
 
@@ -729,7 +733,7 @@ def search_for_role_by_id(role_id, roles):
     return None
 
 
-async def execute_mod_action(guild_id, mod_action, member):
+async def execute_mod_action(guild_id, mod_action, member, report_id):
     db_conn = create_conn()
     db_cursor = db_conn.cursor()
     try:
@@ -751,6 +755,11 @@ async def execute_mod_action(guild_id, mod_action, member):
                 await member.edit(reason=f"{punish_message_config[2]}", mute=True)
             case 3:
                 await warn_member(member, f"{punish_message_config[2]}")
+        db_cursor.execute(f"""
+            INSERT INTO PunishmentReportEntries (user_id, report_id, user_name)
+            VALUES ({member.id}, {report_id}, '{member.name}')
+        """)
+        db_conn.commit()
     except Exception as e:
         print(e)
     db_cursor.close()
@@ -770,14 +779,14 @@ def construct_help_pages(help_command_type):
         """).fetchone()
     page_count = math.ceil(help_commands_count[0] / HELP_COMMANDS_PER_PAGE)
     for x in range(1, page_count + 1):
-        curr_embed = discord.Embed(title=f'Help Commands - Page {x}')
+        curr_embed = discord.Embed(title=f'Help Commands - Page {x}', colour=discord.Colour.blue())
         help_commands = db_cursor.execute(f"""
                 WITH commands AS (
                     SELECT *, row_number() over(order by '') AS row_num FROM HelpCommands 
                     WHERE command_type = {help_command_type}
                 )
                 SELECT * FROM commands WHERE row_num >= {x} + ({x} - 1) * {HELP_COMMANDS_PER_PAGE} - ({x} - 1) 
-                AND row_num <= {x} * 5
+                AND row_num <= {x} * {HELP_COMMANDS_PER_PAGE}
             """).fetchall()
         for command in help_commands:
             curr_embed.add_field(name=command[1], value=command[2])
@@ -835,6 +844,7 @@ async def enact_mod_action(server, message):
     role_groups = db_cursor.execute(f"""
         SELECT * FROM RoleGroups WHERE guild_id = {server.guild_id}
     """).fetchall()
+    report_id = produce_punishment_report(message)
     mod_action = db_cursor.execute(f"""
         SELECT * FROM Configuration WHERE guild_id = {server.guild_id} AND var_name = '{CONFIG_VAR_RG_MOD_ACTION}'
     """).fetchone()
@@ -857,7 +867,7 @@ async def enact_mod_action(server, message):
                         has_role_in_group = True
                 if not has_role_in_group:
                     if member.joined_at <= datetime.utcnow() - timedelta(hours=enforcement_period):
-                        await execute_mod_action(server.guild_id, int(mod_action[2]), member)
+                        await execute_mod_action(server.guild_id, int(mod_action[2]), member, report_id)
     db_cursor.close()
     db_conn.close()
 
@@ -891,6 +901,104 @@ async def set_punish_message(punish_message, message):
         print(e)
     db_cursor.close()
     db_conn.close()
+
+
+def produce_punishment_report(msg_ctx):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    date_now = datetime.utcnow().date()
+    report = db_cursor.execute(f"""
+        SELECT * FROM PunishmentReports WHERE guild_id = {msg_ctx.guild.id}
+    """).fetchone()
+    if report is not None:
+        db_cursor.execute(f"""
+            DELETE FROM PunishmentReports WHERE report_id = {report[0]}
+        """)
+    mod_action_config = db_cursor.execute(f"""
+        SELECT value FROM Configuration WHERE guild_id = {msg_ctx.guild.id} AND var_name = '{CONFIG_VAR_RG_MOD_ACTION}'
+    """).fetchone()
+    db_cursor.execute(f"""
+        INSERT INTO PunishmentReports (guild_id, date_produced, punishment_type)
+        VALUES ({msg_ctx.guild.id}, '{date_now}', {mod_action_config[0]});
+    """)
+    db_conn.commit()
+    report_id = db_cursor.execute(f"""
+        SELECT report_id FROM PunishmentReports WHERE guild_id = {msg_ctx.guild.id} 
+        AND date_produced = '{date_now}';
+    """).fetchone()[0]
+    db_cursor.close()
+    db_conn.close()
+    return report_id
+
+
+def construct_role_report_pages(ctx):
+    db_conn = create_conn()
+    db_cursor = db_conn.cursor()
+    bot_role_report_pages.clear()
+    report = db_cursor.execute(f"""
+        SELECT * FROM PunishmentReports WHERE guild_id = {ctx.guild.id}
+    """).fetchone()
+    report_entries_count = db_cursor.execute(f"""
+        SELECT COUNT(*) FROM PunishmentReportEntries WHERE report_id = {report[0]}
+    """).fetchone()
+    page_count = math.ceil(report_entries_count[0] / PUNISHED_USERS_PER_PAGE) if report_entries_count[0] != 0 else 1
+    for x in range(1, page_count + 1):
+        curr_embed = discord.Embed(title=f'Role Violators Report - Page {x}', colour=discord.Colour.red())
+        curr_embed.description = f'Last Executed: {report[2]}\n' \
+                                 + f'Users Flagged: {report_entries_count[0]}\n' \
+                                 + f'Punishment Method: {interpret_mod_action(ModAction(report[3]))}'
+        report_entries = db_cursor.execute(f"""
+                        WITH report_entries AS (
+                            SELECT *, row_number() over(order by '') AS row_num FROM PunishmentReportEntries 
+                            WHERE report_id = {report[0]}
+                        )
+                        SELECT * FROM report_entries 
+                        WHERE row_num >= {x} + ({x} - 1) * {PUNISHED_USERS_PER_PAGE} - ({x} - 1) 
+                        AND row_num <= {x} * {PUNISHED_USERS_PER_PAGE}
+                    """).fetchall()
+        for command in report_entries:
+            curr_embed.add_field(name=command[2], value='Flagged User')
+        bot_role_report_pages.append(curr_embed)
+    db_cursor.close()
+    db_conn.close()
+
+
+async def show_role_punish_report(ctx):
+    construct_role_report_pages(ctx)
+    buttons = [u"\u23EA", u"\u25C0", u"\u25B6", u"\u23E9"]
+    current_page = 0
+    msg = await ctx.channel.send(embed=bot_role_report_pages[current_page])
+    for button in buttons:
+        await msg.add_reaction(button)
+    while True:
+        try:
+            reaction, user = await client.wait_for("reaction_add",
+                                                   check=lambda react, usr:
+                                                   usr == ctx.author and react.emoji in buttons,
+                                                   timeout=60)
+        except asyncio.TimeoutError as e:
+            embed = bot_role_report_pages[current_page]
+            embed.set_footer(text='Timed Out')
+            await msg.clear_reactions()
+            print(e)
+        except Exception as e:
+            print(e)
+        else:
+            previous_page = current_page
+            if reaction.emoji == buttons[0]:
+                current_page = 0
+            elif reaction.emoji == buttons[1]:
+                if current_page >= 0:
+                    current_page -= 1
+            elif reaction.emoji == buttons[2]:
+                if current_page < len(bot_role_report_pages) - 1:
+                    current_page += 1
+            elif reaction.emoji == buttons[3]:
+                current_page = len(bot_role_report_pages) - 1
+            for button in buttons:
+                await msg.remove_reaction(button, ctx.author)
+            if current_page != previous_page:
+                await msg.edit(embed=bot_role_report_pages[current_page])
 
 
 @client.event
