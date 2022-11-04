@@ -1052,8 +1052,8 @@ async def on_guild_remove(guild):
 async def on_message(message):
     if message.author == client.user:
         return
-
-    if message.content.startswith(BOT_CMD_INDICATOR):
+    # Only owner should be able to command bot
+    if message.content.startswith(BOT_CMD_INDICATOR) and message.author.id == message.guild.owner.id:
         full_command = message.content.split(BOT_CMD_INDICATOR, 1)[1]
         params = full_command.split(' ')
         command = params.pop(0)
