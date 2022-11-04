@@ -1,7 +1,5 @@
 import asyncio
 import math
-import this
-import threading
 from sqlite3 import IntegrityError
 
 import models
@@ -9,7 +7,6 @@ from models import RoleGroup, DataType, ModAction
 import discord
 import apputil
 from apputil import create_conn
-from threading import Thread
 from datetime import datetime, timedelta
 
 
